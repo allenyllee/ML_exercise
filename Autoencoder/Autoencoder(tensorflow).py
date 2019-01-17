@@ -15,7 +15,7 @@
 # In[1]:
 
 
-#import numpy as np
+import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
@@ -24,7 +24,7 @@ mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
 
 # ## 定義helper function
 
-# In[35]:
+# In[2]:
 
 
 def weight_variable(shape, name='W'):
@@ -39,7 +39,7 @@ def bias_variable(shape, name='B'):
     return b
 
 
-# In[36]:
+# In[3]:
 
 
 def plot_n_reconstruct(origin_img, reconstruct_img, n =10):
@@ -115,6 +115,47 @@ def plot_n_code_compare(code1, code2):
         plt.bar(x_code,y_code, width)
 
     plt.show()
+    
+    
+    
+# 隨機補0 噪聲
+def add_noise1(imgs):
+    # 加入噪声
+    noise_factor = 0.5
+    # 以機率為 noise_factor 產生 0
+    noise = np.random.choice(np.arange(0,2), size=imgs.shape, p=[noise_factor, 1-noise_factor])
+    noisy_imgs = imgs * noise
+    noisy_imgs = np.clip(noisy_imgs, 0., 1.)
+    return noisy_imgs
+
+def test_data_gen1(obj,n=10,keep_prob=1):
+    batch = mnist.test.images[0:n, :]
+    noise_batch = add_noise1(batch)
+    
+    print(obj.x_input.shape)
+    
+    feed_dict = {obj.x_input:noise_batch, obj.keep_prob:keep_prob}
+    return noise_batch, feed_dict
+
+# 高斯噪聲
+def add_noise2(imgs):
+    # 加入噪声
+    noise_factor = 0.5
+    #print(*imgs.shape)
+    # 產生平均為0，標準差為0.5 的噪聲
+    noisy_imgs = imgs + noise_factor * np.random.randn(*imgs.shape)
+    #noisy_imgs = imgs 
+    noisy_imgs = np.clip(noisy_imgs, 0., 1.)
+    return noisy_imgs
+
+def test_data_gen2(obj,n=10,keep_prob=1):
+    batch = mnist.test.images[0:n, :]
+    noise_batch = add_noise2(batch)
+    
+    print(obj.x_input.shape)
+    
+    feed_dict = {obj.x_input:noise_batch, obj.keep_prob:keep_prob}
+    return noise_batch, feed_dict
 
 
 # ## Normal Auto Encoder
@@ -153,13 +194,13 @@ def plot_n_code_compare(code1, code2):
 # - [How to use tensorboard Embedding Projector? - Stack Overflow](https://stackoverflow.com/questions/40849116/how-to-use-tensorboard-embedding-projector)
 # 
 
-# In[55]:
+# In[4]:
 
 
 import os
 
 class Autoencoder:
-    def __init__(self):
+    def __init__(self, test_size=-1, embedding_test_batch_size=1024, log_dir='/tmp/tensorflowlogs', train_dir='/train', test_dir='/test'):
         tf.reset_default_graph() # reset graph
         
         self.init_input_place() # init placeholder
@@ -167,12 +208,17 @@ class Autoencoder:
         self.h_e, self.w, self.h_d = self.build_ae() # build graph
 
         self.loss_func() # define loss function
+        self.train_op() # define train op
         
         init_op = tf.global_variables_initializer() # define initialize operation
         
+        self.test_size = test_size # set test data size for evaluation cost
+        self.embedding_test_batch_size = embedding_test_batch_size # set test batch size for embedding summary
+        
+        
         self.sess = tf.InteractiveSession() # open new session
         self.sess.run(init_op) # run initialze operation
-        self.init_summary(self.sess) # init tensorboard summary log
+        self.init_summary(self.sess, log_dir, train_dir, test_dir) # init tensorboard summary log
         self.embedding_summary()
         
     def init_input_place(self):
@@ -192,21 +238,27 @@ class Autoencoder:
             loss = tf.pow((self.x_reconstruct - self.x_target),2)
             self.cost = tf.reduce_mean(loss)
 
+    def train_op(self):
         with tf.name_scope('train_step'):
             self.optimizer = tf.train.AdamOptimizer(0.001).minimize(self.cost)
         
-    def init_summary(self, sess):
-        self.summaries_dir = "/tmp/tensorflowlogs"
+    # 執行 tensorboard --logdir=/tmp/tensorflowlogs
+    def init_summary(self, sess, log_dir='/tmp/tensorflowlogs', train_dir='/train', test_dir='/test'):
+        from datetime import datetime
+        now = datetime.now()
+        # 儲存tensorboard summary 的地方
+        self.summaries_dir = log_dir + '/' + now.strftime("%Y%m%d-%H%M%S")
         # 定義 summary op
         tf.summary.image('input', self.x_input_reshape, 3)
         tf.summary.image('output', tf.reshape(self.x_reconstruct, shape=[-1, 28, 28, 1]), 3)
         self.cost_summary = tf.summary.scalar('cost', self.cost)
         self.merged_summary = tf.summary.merge_all()
         # summary writer
-        self.train_writer = tf.summary.FileWriter(self.summaries_dir + '/train', sess.graph)
-        self.test_writer = tf.summary.FileWriter(self.summaries_dir + '/test')
+        self.train_writer = tf.summary.FileWriter(self.summaries_dir + train_dir, sess.graph)
+        self.test_writer = tf.summary.FileWriter(self.summaries_dir + test_dir)
     
     def embedding_summary(self):
+        # test data 的 label 跟小圖，用在 tensorboard 顯示資料點
         LABELS = os.path.join(os.getcwd(), "labels_1024.tsv")
         SPRITES = os.path.join(os.getcwd(), "sprite_1024.png")
         
@@ -216,7 +268,7 @@ class Autoencoder:
         self.embedding_size = self.h_e[-1].shape[1]
         ##############################
         
-        embedding = tf.Variable(tf.zeros([1024, self.embedding_size]), name="test_embedding")
+        embedding = tf.Variable(tf.zeros([self.embedding_test_batch_size, self.embedding_size]), name="test_embedding")
         self.assignment = embedding.assign(self.embedding_input)
         self.saver = tf.train.Saver()
         
@@ -230,6 +282,12 @@ class Autoencoder:
         # Specify the width and height of a single thumbnail.
         embedding_config.sprite.single_image_dim.extend([28, 28])
         tf.contrib.tensorboard.plugins.projector.visualize_embeddings(self.test_writer, config)
+    
+    def save_embedding(self, epoch):
+        _, test_feed_dict = self.test_data_gen(n=self.embedding_test_batch_size)
+        self.sess.run(self.assignment, feed_dict=test_feed_dict)
+        self.saver.save(self.sess, os.path.join(self.summaries_dir, "model.ckpt"), epoch)
+        
     
     def build_ae(self):
 
@@ -252,9 +310,10 @@ class Autoencoder:
             b = bias_variable([30])
             h = tf.nn.sigmoid(tf.add(tf.matmul(out, w), b))
             out = h
+            
             # get original layer shape
-            # out_shape = out.shape.as_list()
-            # out_shape[0] = -1 # batch size must be -1
+#             out_shape = out.shape.as_list()
+#             out_shape[0] = -1 # batch size must be -1
             out_shape = tf.shape(out)
             # flatten layer
             out = tf.layers.Flatten()(out)
@@ -287,11 +346,11 @@ class Autoencoder:
         return encoder_list, weight_list, decoder_list
 
 
-    def train_data_gen(self,n=60, keep_prob=1):
+    def train_data_gen(self, n=60, keep_prob=1):
         batch = mnist.train.next_batch(n)[0]
         return batch, {self.x_input:batch, self.keep_prob:keep_prob}
     
-    def test_data_gen(self,n=10, keep_prob=1):
+    def test_data_gen(self, obj=None, n=10, keep_prob=1):
         batch = mnist.test.images[0:n, :]
         return batch, {self.x_input:batch, self.keep_prob:keep_prob}
     
@@ -310,7 +369,7 @@ class Autoencoder:
             ### write tensorboard summary ###
             if i % 200 == 0:
                 # test cost
-                _, test_feed_dict = self.test_data_gen(-1)
+                _, test_feed_dict = self.test_data_gen(n=self.test_size)
                 # 執行 summary op
                 #summary = self.cost_summary.eval(feed_dict=test_feed_dict)
                 # collect all summaries
@@ -318,9 +377,7 @@ class Autoencoder:
                 self.test_writer.add_summary(summary, i)
                 self.test_writer.flush()
                 ### save embedding project ###
-                _, test_feed_dict = self.test_data_gen(1024)
-                self.sess.run(self.assignment, feed_dict=test_feed_dict)
-                self.saver.save(self.sess, os.path.join(self.summaries_dir, "model.ckpt"), i)
+                self.save_embedding(epoch=i)
                 ##############################
                 
             # train cost
@@ -334,14 +391,17 @@ class Autoencoder:
             ### update ###
             self.optimizer.run(feed_dict=train_feed_dict)
 
-        _, test_feed_dict = self.test_data_gen(-1)
+        _, test_feed_dict = self.test_data_gen(n=self.test_size)
         print("final loss %g" % self.cost.eval(feed_dict=test_feed_dict))
 
         for h_i in self.h_e:
             print("average output activation value %g" % tf.reduce_mean(h_i).eval(feed_dict=test_feed_dict))
             
-    def plot_test(self, test_size=10, draw_code=True):
-        test_origin_img, test_feed_dict = self.test_data_gen(test_size)
+    def plot_test(self, test_size=10, test_data_gen=None, draw_code=True):
+        if test_data_gen is None:
+            test_data_gen = self.test_data_gen
+            
+        test_origin_img, test_feed_dict = test_data_gen(obj=self, n=test_size)
         test_reconstruct_img = self.x_reconstruct.eval(feed_dict=test_feed_dict)
         print(self.x_reconstruct.shape)
 
@@ -398,7 +458,7 @@ class Autoencoder:
         plt.show()
 
 
-# In[56]:
+# In[5]:
 
 
 ae = Autoencoder()
@@ -422,46 +482,59 @@ for i in range(30):
 ae.plot_decode(code_test)
 
 
+# ### 測試對抗noise能力
+
+# In[7]:
+
+
+temp = ae.plot_test(test_size=20, test_data_gen=test_data_gen1)
+temp = ae.plot_test(test_size=20, test_data_gen=test_data_gen2)
+
+
 # ## Sparse Auto encoder
 
 # ### Loss function
 
-# In[7]:
+# In[8]:
 
 
 def logfunc(x, x2):
     return tf.multiply(x, tf.log(tf.div(x,x2)))
 
 def kl_div(rho, rho_hat):
-    invrho = tf.subtract(tf.constant(1.),rho)
-    invrhohat = tf.subtract(tf.constant(1.),rho_hat)
-    logrho = tf.add(logfunc(rho, rho_hat), logfunc(invrho, invrhohat))
+    with tf.name_scope('KL_divergence'):
+        invrho = tf.subtract(tf.constant(1.),rho)
+        invrhohat = tf.subtract(tf.constant(1.),rho_hat)
+        logrho = tf.add(logfunc(rho, rho_hat), logfunc(invrho, invrhohat))
     return logrho
-
-
-# In[8]:
-
-
-class SparseAutoencoder(Autoencoder):
-    def loss_func(self):
-        from functools import reduce
-        alpha = 0
-        beta = 7.5e-2
-        kl_div_loss = reduce(lambda x, y: x+y, 
-                             map(lambda x: tf.reduce_sum(kl_div(0.02, tf.reduce_mean(x,0))), 
-                                 [self.h_e[-1]]))
-        l2_loss = reduce(lambda x, y: x+y, map(lambda x:tf.nn.l2_loss(x), self.w))
-
-        self.x_reconstruct = self.h_d[-1]
-        reconstruct_loss = tf.reduce_mean(tf.pow(self.x_reconstruct - self.x_target_reshape, 2))
-        self.cost = reconstruct_loss + alpha * l2_loss + beta * kl_div_loss
-        self.optimizer = tf.train.AdamOptimizer(0.01).minimize(self.cost)
 
 
 # In[9]:
 
 
-sae = SparseAutoencoder()
+class SparseAutoencoder(Autoencoder):
+    def loss_func(self):
+        with tf.name_scope('cost'):
+            from functools import reduce
+            alpha = 0
+            beta = 7.5e-2
+            kl_div_loss = reduce(lambda x, y: x+y, 
+                                 map(lambda x: tf.reduce_sum(kl_div(0.02, tf.reduce_mean(x,0))), 
+                                     [self.h_e[-1]]))
+            l2_loss = reduce(lambda x, y: x+y, map(lambda x:tf.nn.l2_loss(x), self.w))
+
+            self.x_reconstruct = self.h_d[-1]
+            reconstruct_loss = tf.reduce_mean(tf.pow(self.x_reconstruct - self.x_target, 2))
+            self.cost = reconstruct_loss + alpha * l2_loss + beta * kl_div_loss
+        
+        with tf.name_scope('train_step'):
+            self.optimizer = tf.train.AdamOptimizer(0.01).minimize(self.cost)
+
+
+# In[10]:
+
+
+sae = SparseAutoencoder(train_dir='/train_sparse', test_dir='/test_sparse')
 
 sae.train(30000)
 
@@ -470,7 +543,7 @@ code_sparse = sae.plot_test(test_size=10)
 
 # ### 畫出每個維度特徵圖
 
-# In[10]:
+# In[11]:
 
 
 code_test = np.zeros(shape=(30,30))
@@ -481,9 +554,18 @@ for i in range(30):
 sae.plot_decode(code_test)
 
 
+# ### 測試對抗noise能力
+
+# In[12]:
+
+
+temp = sae.plot_test(test_size=20, test_data_gen=test_data_gen1)
+temp = sae.plot_test(test_size=20, test_data_gen=test_data_gen2)
+
+
 # ## 比較 non-sparse 與 sparse
 
-# In[11]:
+# In[13]:
 
 
 plot_n_code_compare(code_non_sparse, code_sparse)
@@ -491,83 +573,86 @@ plot_n_code_compare(code_non_sparse, code_sparse)
 
 # ## Convolution Auto Encoder (with stride 2X2, 卷積核每次移動2格)
 
-# In[12]:
+# In[14]:
 
 
-def conv2d(x, w):
-    return tf.nn.conv2d(x, w, strides=[1,2,2,1], padding='SAME')
+def conv2d(x, w, name='conv2d'):
+    return tf.nn.conv2d(x, w, strides=[1,2,2,1], padding='SAME', name=name)
 
-def deconv2d(x, w, output_shape):
-    return tf.nn.conv2d_transpose(x, w, output_shape, strides = [1, 2, 2, 1], padding = 'SAME')
+def deconv2d(x, w, output_shape, name='deconv2d'):
+    return tf.nn.conv2d_transpose(x, w, output_shape, strides = [1, 2, 2, 1], padding = 'SAME', name=name)
 
 
-# In[13]:
+# In[15]:
 
 
 class ConvolutionAutoEncoder(Autoencoder):
     def init_input_place(self):
-        self.x_input = tf.placeholder(tf.float32, shape=[None, 784])
-        self.x_input_reshape = tf.reshape(self.x_input, [-1, 28, 28, 1]) #28 X 28 X 1
+        with tf.name_scope('input_data'):
+            self.x_input = tf.placeholder(tf.float32, shape=[None, 784])
+            self.x_input_reshape = tf.reshape(self.x_input, [-1, 28, 28, 1]) #28 X 28 X 1
+
+            self.x_target = self.x_input_reshape
+            self.x_target_reshape = self.x_input_reshape
         
-        self.x_target = self.x_input
-        self.x_target_reshape = self.x_input_reshape
-        
-        self.keep_prob = tf.placeholder(tf.float32)
+        with tf.name_scope('control_variable'):
+            self.keep_prob = tf.placeholder(tf.float32)
         
     def build_ae(self):
         decoder_list = []
         encoder_list = []
         weight_list = []
         
-        ### encoder ###
-        w = weight_variable([5,5,1,64], "w_e_conv1")
-        b = bias_variable([64], "b_e_conv1")
-        h = tf.nn.relu(tf.add(conv2d(self.x_input_reshape, w), b)) # 14 X 14 X 64
-        out = h
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
         
+        ### encoder ###
+        with tf.name_scope('encoder'):
+            w = weight_variable([5,5,1,64])
+            b = bias_variable([64])
+            h = tf.nn.relu(tf.add(conv2d(self.x_input_reshape, w), b)) # 14 X 14 X 64
+            out = h
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)
 
-        w = weight_variable([5,5,64,1], "w_e_conv2")
-        b = bias_variable([1], "b_e_conv2")
-        h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 7 X 7 X 1
-        out = h
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
 
+            w = weight_variable([5,5,64,1])
+            b = bias_variable([1])
+            h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 7 X 7 X 1
+            out = h
 
-        # get original layer shape
-        out_shape = out.shape.as_list()
-        out_shape[0] = -1 # batch size must be -1
-        # flatten layer
-        out = tf.layers.Flatten()(out)
-        # add to list
-        encoder_list.append(out)
-        # restore shape
-        out = tf.reshape(out, shape=out_shape)
+            # get original layer shape
+            out_shape = tf.shape(out)
+            # flatten layer
+            out = tf.layers.Flatten()(out)
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)
+            
+            # restore shape
+            out = tf.reshape(out, shape=out_shape)
         
         
         ### decoder ###
-        w = weight_variable([5,5,64,1], "w_d_conv1")
-        b = bias_variable([64], "b_d_conv1")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 64])
-        h = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 14 X 14 X 64
-        out = h
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
-        
-        
-        w = weight_variable([5,5,1,64], "w_d_conv2")
-        b = bias_variable([1], "b_d_conv1")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 28, 28, 1])
-        h = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 28 X 28 X 1
-        out = h
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
+        with tf.name_scope('decoder'):
+            w = weight_variable([5,5,64,1])
+            b = bias_variable([64])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 64])
+            h = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 14 X 14 X 64
+            out = h
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
+
+
+            w = weight_variable([5,5,1,64])
+            b = bias_variable([1])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 28, 28, 1])
+            # 最後一層要用 sigmoid (因為input 是0~1 的值)
+            h = tf.nn.sigmoid(tf.add(deconv2d(out, w, output_shape), b)) # 28 X 28 X 1
+            out = h
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
 
         return encoder_list, weight_list, decoder_list
     
@@ -590,10 +675,10 @@ class ConvolutionAutoEncoder(Autoencoder):
         plt.show()
 
 
-# In[14]:
+# In[16]:
 
 
-conv_ae = ConvolutionAutoEncoder()
+conv_ae = ConvolutionAutoEncoder(train_dir='/train_conv', test_dir='/test_conv')
 
 conv_ae.train(20000)
 
@@ -602,11 +687,20 @@ code = conv_ae.plot_test(10, draw_code=True)
 
 # ### 畫出第一層filter
 
-# In[15]:
+# In[17]:
 
 
 image1 = mnist.test.images[0]
 conv_ae.plot_conv_layer(conv_ae.h_e[0], image1, 64)
+
+
+# ### 測試對抗noise能力
+
+# In[18]:
+
+
+temp = conv_ae.plot_test(test_size=20, test_data_gen=test_data_gen1)
+temp = conv_ae.plot_test(test_size=20, test_data_gen=test_data_gen2)
 
 
 # ## Convolution Auto Encoder with max pooling
@@ -629,44 +723,47 @@ conv_ae.plot_conv_layer(conv_ae.h_e[0], image1, 64)
 # - [tf.image.resize_images  |  TensorFlow](https://www.tensorflow.org/api_docs/python/tf/image/resize_images)
 # 
 
-# In[16]:
+# In[19]:
 
 
 #convolution, deconvolution, pooling, unpooling
 
-def conv2d(x, w):
-    return tf.nn.conv2d(x, w, strides=[1,1,1,1], padding='SAME')
+def conv2d(x, w, name='convs2'):
+    return tf.nn.conv2d(x, w, strides=[1,1,1,1], padding='SAME', name=name)
 
-def deconv2d(x, w, output_shape):
-    return tf.nn.conv2d_transpose(x, w, output_shape, strides = [1, 1, 1, 1], padding = 'SAME')
+def deconv2d(x, w, output_shape, name='deconv2d'):
+    return tf.nn.conv2d_transpose(x, w, output_shape, strides = [1, 1, 1, 1], padding = 'SAME', name=name)
 
 def max_pool_2x2(x):
-    print("max_pool_2x2")
-    print(x.shape)
-    out = tf.nn.max_pool(x, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME')
-    print(out.shape)
+    with tf.name_scope('max_pool_2x2'):
+        print("max_pool_2x2")
+        print(x.shape)
+        out = tf.nn.max_pool(x, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME')
+        print(out.shape)
     return out
 
 def max_unpool_2x2(x, shape):
-    print("max_unpool_2x2")
-    print(x.shape)
-    # NEAREST_NEIGHBOR 速度最快，效果跟 BILINEAR, BICUBIC 差不多，但 BICUBIC 非常慢
-    inference = tf.image.resize_images(x, [shape[1], shape[2]], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    print(inference.shape)
+    with tf.name_scope('max_unpool_2x2'):
+        print("max_unpool_2x2")
+        print(x.shape)
+        # NEAREST_NEIGHBOR 速度最快，效果跟 BILINEAR, BICUBIC 差不多，但 BICUBIC 非常慢
+        inference = tf.image.resize_images(x, [shape[1], shape[2]], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        print(inference.shape)
     return inference
 
 def max_unpool_2x2_fill_zero(x, output_shape):
-    print("max_unpool_2x2_fill_zero")
-    print(x.shape)
-    out = tf.concat([x, tf.zeros_like(x)], 3)
-    out = tf.concat([out, tf.zeros_like(out)], 2)
-    out_size = output_shape
-    out = tf.reshape(out, out_size)
-    print(out.shape)
+    with tf.name_scope('max_unpool_2x2_fill_zero'):
+        print("max_unpool_2x2_fill_zero")
+        print(x.shape)
+        out = tf.concat([x, tf.zeros_like(x)], 3)
+        out = tf.concat([out, tf.zeros_like(out)], 2)
+        out_size = output_shape
+        out = tf.reshape(out, out_size)
+        print(out.shape)
     return out
 
 
-# In[17]:
+# In[20]:
 
 
 class ConvolutionMaxpoolFillZeroAutoEncoder(ConvolutionAutoEncoder):
@@ -676,62 +773,62 @@ class ConvolutionMaxpoolFillZeroAutoEncoder(ConvolutionAutoEncoder):
         weight_list = []
         
         ### encoder ###
-        w = weight_variable([5,5,1,64], "w_e_conv1")
-        b = bias_variable([64], "b_e_conv1")
-        h = tf.nn.relu(tf.add(conv2d(self.x_input_reshape, w), b)) # 28 X 28 X 64
-        out = max_pool_2x2(h) # 14 X 14 X 64
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
-        
+        with tf.name_scope('encoder'):
+            w = weight_variable([5,5,1,64])
+            b = bias_variable([64])
+            h = tf.nn.relu(tf.add(conv2d(self.x_input_reshape, w), b)) # 28 X 28 X 64
+            out = max_pool_2x2(h) # 14 X 14 X 64
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)
 
-        w = weight_variable([5,5,64,1], "w_e_conv2")
-        b = bias_variable([1], "b_e_conv2")
-        h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 14 X 14 X 1
-        out = max_pool_2x2(h) # 7 X 7 X 1
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
 
-        # get original layer shape
-        out_shape = out.shape.as_list()
-        out_shape[0] = -1 # batch size must be -1
-        # flatten layer
-        out = tf.layers.Flatten()(out)
-        # add to list
-        encoder_list.append(out)
-        # restore shape
-        out = tf.reshape(out, shape=out_shape)
+            w = weight_variable([5,5,64,1])
+            b = bias_variable([1])
+            h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 14 X 14 X 1
+            out = max_pool_2x2(h) # 7 X 7 X 1
+
+            # get original layer shape
+            out_shape = tf.shape(out)
+            # flatten layer
+            out = tf.layers.Flatten()(out)
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)            
+            
+            # restore shape
+            out = tf.reshape(out, shape=out_shape)
         
         ### decoder ###
-        w = weight_variable([5,5,64,1], "w_d_conv1")
-        b = bias_variable([64], "b_d_conv1")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 7, 7, 64])
-        h = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 7 X 7 X 64
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 64])
-        out = max_unpool_2x2_fill_zero(h, output_shape) # 14 X 14 X 64
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
-        
-        
-        w = weight_variable([5,5,1,64], "w_d_conv2")
-        b = bias_variable([1], "b_d_conv1")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 1])
-        h = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 14 X 14 X 1
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 28, 28, 1])
-        out = max_unpool_2x2_fill_zero(h, output_shape) # 28 X 28 X 1
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
+        with tf.name_scope('decoder'):
+            w = weight_variable([5,5,64,1])
+            b = bias_variable([64])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 7, 7, 64])
+            h = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 7 X 7 X 64
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 64])
+            out = max_unpool_2x2_fill_zero(h, output_shape) # 14 X 14 X 64
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
+
+
+            w = weight_variable([5,5,1,64])
+            b = bias_variable([1])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 1])
+            h = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 14 X 14 X 1
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 28, 28, 1])
+            out = max_unpool_2x2_fill_zero(h, output_shape) # 28 X 28 X 1
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
 
         return encoder_list, weight_list, decoder_list
 
 
-# In[18]:
+# In[21]:
 
 
-convmax_ae = ConvolutionMaxpoolFillZeroAutoEncoder()
+convmax_ae = ConvolutionMaxpoolFillZeroAutoEncoder(train_dir='/train_conv_maxpool', test_dir='/test_conv_maxpool')
 
 convmax_ae.train(20000)
 
@@ -740,16 +837,25 @@ code = convmax_ae.plot_test(10, draw_code=True)
 
 # ### 畫出第一層filter
 
-# In[19]:
+# In[22]:
 
 
 image1 = mnist.test.images[0]
 convmax_ae.plot_conv_layer(convmax_ae.h_e[0], image1, 64)
 
 
-# ### max_unpool_2x2 補零法
+# ### 測試對抗noise能力
 
-# In[20]:
+# In[23]:
+
+
+temp = convmax_ae.plot_test(test_size=20, test_data_gen=test_data_gen1)
+temp = convmax_ae.plot_test(test_size=20, test_data_gen=test_data_gen2)
+
+
+# ## max_unpool_2x2 補零法
+
+# In[24]:
 
 
 # 在越後方的維度表示越內層括號
@@ -767,7 +873,7 @@ test_out = test_out.eval().reshape([4,4,3]) # 4 X 4 X 3
 print(test_out[:,:,0]) # 印出 4 X 4
 
 
-# In[21]:
+# In[25]:
 
 
 # 在越後方的維度表示越內層括號
@@ -846,40 +952,42 @@ plt.show()
 # 
 #     如果已经对label进行了one hot编码，则可以直接使用tf.nn.softmax_cross_entropy_with_logits。
 
-# In[22]:
+# In[26]:
 
 
 class SparseConvolutionMaxpoolAutoEncoder(ConvolutionAutoEncoder):
     def loss_func(self):
-        from functools import reduce
-        
-        # reconstruct
-        self.x_reconstruct = self.h_d[-1]
-        
-        # 計算KL divergence 時，必須要通過 sigmoid，因為KL divergence 是計算機率，其中有log(1-P)項，
-        # 如果沒有通過sigmoid，算出來P可能大於1，就會變成nan
-        beta = 7.5e-3
-        kl_div_loss = reduce(lambda x, y: x+y, 
-                             map(lambda x: tf.reduce_sum(kl_div(0.02, tf.reduce_mean(x,0))), 
-                                 [tf.nn.sigmoid(tf.layers.Flatten()(self.h_e[-1]))]))
+        with tf.name_scope('cost'):
+            from functools import reduce
+
+            # reconstruct
+            self.x_reconstruct = self.h_d[-1]
+
+            # 計算KL divergence 時，必須要通過 sigmoid，因為KL divergence 是計算機率，其中有log(1-P)項，
+            # 如果沒有通過sigmoid，算出來P可能大於1，就會變成nan
+            beta = 7.5e-3
+            kl_div_loss = reduce(lambda x, y: x+y, 
+                                 map(lambda x: tf.reduce_sum(kl_div(0.02, tf.reduce_mean(x,0))), 
+                                     [tf.nn.sigmoid(tf.layers.Flatten()(self.h_e[-1]))]))
 
 
-        # 使用平方差loss 的話，輸出層不能加激發函數，而且decode layers 的激發函數必須用sigmoid
-        # 用sigmoid就無法建立很深層的layers
-        #loss = tf.pow((x_reconstruct - x_origin),2)
+            # 使用平方差loss 的話，輸出層不能加激發函數，而且decode layers 的激發函數必須用sigmoid
+            # 用sigmoid就無法建立很深層的layers
+            #loss = tf.pow((x_reconstruct - x_origin),2)
 
-        # 使用cross entropy 的效果比平方差效果更好，而且隱藏層的激發函數都可以使用relu
-        # relu 的好處是可以建立很深的layers
-        logits_ = self.h_d[-2]
-        targets_ = self.x_target_reshape
-        # 思考問題：為何要用 sigmoid_cross_entropy_with_logits？
-        # ans: 因為每個 pixel 的值介於0~1，可以當成機率值，計算cross entropy，又sigmoid 是element-wise計算cross entropy
-        #      而softmax 是強迫所有輸出值和為1，顯然在圖片上，我們不需要所有輸出和為1。
-        loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=targets_, logits=logits_) + beta * kl_div_loss
-        #loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=targets_, logits=logits_) + beta * kl_div_loss
-        self.cost = tf.reduce_mean(loss)
+            # 使用cross entropy 的效果比平方差效果更好，而且隱藏層的激發函數都可以使用relu
+            # relu 的好處是可以建立很深的layers
+            logits_ = self.h_d[-2]
+            targets_ = self.x_target_reshape
+            # 思考問題：為何要用 sigmoid_cross_entropy_with_logits？
+            # ans: 因為每個 pixel 的值介於0~1，可以當成機率值，計算cross entropy，又sigmoid 是element-wise計算cross entropy
+            #      而softmax 是強迫所有輸出值和為1，顯然在圖片上，我們不需要所有輸出和為1。
+            loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=targets_, logits=logits_) + beta * kl_div_loss
+            #loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=targets_, logits=logits_) + beta * kl_div_loss
+            self.cost = tf.reduce_mean(loss)
 
-        self.optimizer = tf.train.AdamOptimizer(0.001).minimize(self.cost)
+        with tf.name_scope('train_step'):
+            self.optimizer = tf.train.AdamOptimizer(0.001).minimize(self.cost)
     
     def build_ae(self):
         decoder_list = []
@@ -887,161 +995,161 @@ class SparseConvolutionMaxpoolAutoEncoder(ConvolutionAutoEncoder):
         weight_list = []
 
         ### encoder ###
-        # convolution
-        w = weight_variable([5,5,1,64], "w_e_conv1")
-        b = bias_variable([64], "b_e_conv1")
-        h = tf.nn.relu(tf.add(conv2d(self.x_input_reshape, w), b)) # 28 X 28 X 64
-        # pooling
-        out = max_pool_2x2(h) # 14 X 14 X 64
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
+        with tf.name_scope('encoder'):
+            # convolution
+            w = weight_variable([5,5,1,64])
+            b = bias_variable([64])
+            h = tf.nn.relu(tf.add(conv2d(self.x_input_reshape, w), b)) # 28 X 28 X 64
+            # pooling
+            out = max_pool_2x2(h) # 14 X 14 X 64
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)
 
 
-        # convolution
-        w = weight_variable([5,5,64,64], "w_e_conv2")
-        b = bias_variable([64], "b_e_conv2")
-        h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 14 X 14 X 64
-        # pooling
-        out = max_pool_2x2(h) # 7 X 7 X 64
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
+            # convolution
+            w = weight_variable([5,5,64,64])
+            b = bias_variable([64])
+            h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 14 X 14 X 64
+            # pooling
+            out = max_pool_2x2(h) # 7 X 7 X 64
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)
 
-        # convolution
-        w = weight_variable([3,3,64,32], "w_e_conv2")
-        b = bias_variable([32], "b_e_conv2")
-        h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 7 X 7 X 32
-        # pooling
-        out = max_pool_2x2(h) # 4 X 4 X 32
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
+            # convolution
+            w = weight_variable([3,3,64,32])
+            b = bias_variable([32])
+            h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 7 X 7 X 32
+            # pooling
+            out = max_pool_2x2(h) # 4 X 4 X 32
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)
 
-        # convolution
-        w = weight_variable([3,3,32,32], "w_e_conv2")
-        b = bias_variable([32], "b_e_conv2")
-        h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 4 X 4 X 32
-        # pooling
-        out = max_pool_2x2(h) # 2 X 2 X 32
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
+            # convolution
+            w = weight_variable([3,3,32,32])
+            b = bias_variable([32])
+            h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 4 X 4 X 32
+            # pooling
+            out = max_pool_2x2(h) # 2 X 2 X 32
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)
 
-        # 1X1 convolution
-        w = weight_variable([1,1,32,10], "w_e_conv3")
-        b = bias_variable([10], "b_e_conv3")
-        h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 2 X 2 X 10
-        # pooling
-        out = max_pool_2x2(h) # 1 X 1 X 10
-        # add to list
-        encoder_list.append(out)
-        weight_list.append(w)
-    
-        # get original layer shape
-        out_shape = out.shape.as_list()
-        out_shape[0] = -1 # batch size must be -1
-        # flatten layer
-        out = tf.layers.Flatten()(out)
-        # add to list
-        encoder_list.append(out)
-        # restore shape
-        out = tf.reshape(out, shape=out_shape)
+            # 1X1 convolution
+            w = weight_variable([1,1,32,10])
+            b = bias_variable([10])
+            h = tf.nn.relu(tf.add(conv2d(out, w), b)) # 2 X 2 X 10
+            # pooling
+            out = max_pool_2x2(h) # 1 X 1 X 10
+
+            # get original layer shape
+            out_shape = tf.shape(out)
+            # flatten layer
+            out = tf.layers.Flatten()(out)
+            # add to list
+            encoder_list.append(out)
+            weight_list.append(w)
+            
+            # restore shape
+            out = tf.reshape(out, shape=out_shape)
     
         ### decoder ###
-        # convolution
-        w = weight_variable([1,1,32,10], "w_d_conv3")
-        b = bias_variable([32], "b_d_conv3")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 1, 1, 32])
-        out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 1 X 1 X 32
-        # upsample
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 2, 2, 32])
-        out = max_unpool_2x2(out, output_shape) # 2 X 2 X 32
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
+        with tf.name_scope('decoder'):
+            # convolution
+            w = weight_variable([1,1,32,10])
+            b = bias_variable([32])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 1, 1, 32])
+            out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 1 X 1 X 32
+            # upsample
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 2, 2, 32])
+            out = max_unpool_2x2(out, output_shape) # 2 X 2 X 32
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
 
 
-        # convolution
-        w = weight_variable([3,3,32,32], "w_d_conv3")
-        b = bias_variable([32], "b_d_conv3")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 2, 2, 32])
-        out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 2 X 2 X 32
-        # upsample
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 4, 4, 32])
-        out = max_unpool_2x2(out, output_shape) # 4 X 4 X 32
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
+            # convolution
+            w = weight_variable([3,3,32,32])
+            b = bias_variable([32])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 2, 2, 32])
+            out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 2 X 2 X 32
+            # upsample
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 4, 4, 32])
+            out = max_unpool_2x2(out, output_shape) # 4 X 4 X 32
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
 
-        # convolution
-        w = weight_variable([3,3,64,32], "w_d_conv3")
-        b = bias_variable([64], "b_d_conv3")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 4, 4, 64])
-        out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 4 X 4 X 64
-        # upsample
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 7, 7, 64])
-        out = max_unpool_2x2(out, output_shape) # 7 X 7 X 64
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
+            # convolution
+            w = weight_variable([3,3,64,32])
+            b = bias_variable([64])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 4, 4, 64])
+            out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 4 X 4 X 64
+            # upsample
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 7, 7, 64])
+            out = max_unpool_2x2(out, output_shape) # 7 X 7 X 64
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
 
 
-        # convolution
-        w = weight_variable([3,3,64,64], "w_d_conv3")
-        b = bias_variable([64], "b_d_conv3")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 7, 7, 64])
-        out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 7 X 7 X 64
-        # upsample
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 64])
-        out = max_unpool_2x2(out, output_shape) # 14 X 14 X 64
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
+            # convolution
+            w = weight_variable([3,3,64,64])
+            b = bias_variable([64])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 7, 7, 64])
+            out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 7 X 7 X 64
+            # upsample
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 64])
+            out = max_unpool_2x2(out, output_shape) # 14 X 14 X 64
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
 
-        # convolution
-        w = weight_variable([5,5,64,64], "w_d_conv1")
-        b = bias_variable([64], "b_d_conv1")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 64])
-        out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 14 X 14 X 64
-        # upsample
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 28, 28, 64])
-        out = max_unpool_2x2(out, output_shape) # 28 X 28 X 64
-        out = tf.nn.dropout(out, self.keep_prob)
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
+            # convolution
+            w = weight_variable([5,5,64,64])
+            b = bias_variable([64])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 14, 14, 64])
+            out = tf.nn.relu(tf.add(deconv2d(out, w, output_shape), b)) # 14 X 14 X 64
+            # upsample
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 28, 28, 64])
+            out = max_unpool_2x2(out, output_shape) # 28 X 28 X 64
+            out = tf.nn.dropout(out, self.keep_prob)
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
 
-        ## logits output
-        # convolution
-        w = weight_variable([5,5,1,64], "w_d_conv2")
-        b = bias_variable([1], "b_d_conv2")
-        output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 28, 28, 1])
-        out = tf.add(deconv2d(out, w, output_shape), b) # 28 X 28 X 1
-        # add to list
-        decoder_list.append(out)
-        weight_list.append(w)
+            ## logits output
+            # convolution
+            w = weight_variable([5,5,1,64])
+            b = bias_variable([1])
+            output_shape = tf.stack([tf.shape(self.x_input_reshape)[0], 28, 28, 1])
+            out = tf.add(deconv2d(out, w, output_shape), b) # 28 X 28 X 1
+            # add to list
+            decoder_list.append(out)
+            weight_list.append(w)
 
-        ## sigmoid output
-        out = tf.nn.sigmoid(out)
-        # add to list
-        decoder_list.append(out)
+            ## sigmoid output
+            out = tf.nn.sigmoid(out)
+            # add to list
+            decoder_list.append(out)
 
         return encoder_list, weight_list, decoder_list
 
 
-# In[23]:
+# In[27]:
 
 
-sparseconvmax_ae = SparseConvolutionMaxpoolAutoEncoder()
+sparseconvmax_ae = SparseConvolutionMaxpoolAutoEncoder(train_dir='/train_saprse_conv_maxpool', test_dir='/test_sparse_conv_maxpool')
 
 sparseconvmax_ae.train(30000,keep_prob=1)
 
@@ -1050,7 +1158,7 @@ code = sparseconvmax_ae.plot_test(10, draw_code=True)
 
 # ### 畫出第一層filter
 
-# In[24]:
+# In[28]:
 
 
 image1 = mnist.test.images[0]
@@ -1059,7 +1167,7 @@ sparseconvmax_ae.plot_conv_layer(sparseconvmax_ae.h_e[0], image1, 64)
 
 # ### 畫出每個維度特徵圖
 
-# In[25]:
+# In[29]:
 
 
 #temp = np.zeros(shape=(10,784))
@@ -1071,6 +1179,15 @@ for i in range(len(code_test)):
 sparseconvmax_ae.plot_decode(code_test)
 
 
+# ### 測試對抗noise能力
+
+# In[30]:
+
+
+temp = sparseconvmax_ae.plot_test(test_size=20, test_data_gen=test_data_gen1)
+temp = sparseconvmax_ae.plot_test(test_size=20, test_data_gen=test_data_gen2)
+
+
 # ## Denoise Sparse Convolution AutoEncoder with max pooling
 
 # - [利用卷积自编码器对图片进行降噪 - 知乎](https://zhuanlan.zhihu.com/p/27902193)
@@ -1078,23 +1195,26 @@ sparseconvmax_ae.plot_decode(code_test)
 # 
 # - [numpy.random.randn — NumPy v1.15 Manual](https://docs.scipy.org/doc/numpy-1.15.0/reference/generated/numpy.random.randn.html)
 
-# In[26]:
+# In[31]:
 
 
 class DenoiseSparseConvolutionMaxpoolAutoEncoder(SparseConvolutionMaxpoolAutoEncoder):
     def init_input_place(self):
-        self.x_input = tf.placeholder(tf.float32, shape=[None, 784])
-        self.x_input_reshape = tf.reshape(self.x_input, [-1, 28, 28, 1]) #28 X 28 X 1
+        with tf.name_scope('input_data'):
+            self.x_input = tf.placeholder(tf.float32, shape=[None, 784])
+            self.x_input_reshape = tf.reshape(self.x_input, [-1, 28, 28, 1]) #28 X 28 X 1
+
+            self.x_target = tf.placeholder(tf.float32, shape=[None, 784])
+            self.x_target_reshape = tf.reshape(self.x_target, [-1, 28, 28, 1]) #28 X 28 X 1
         
-        self.x_target = tf.placeholder(tf.float32, shape=[None, 784])
-        self.x_target_reshape = tf.reshape(self.x_target, [-1, 28, 28, 1]) #28 X 28 X 1
-        
-        self.keep_prob = tf.placeholder(tf.float32)
+        with tf.name_scope('control_variable'):
+            self.keep_prob = tf.placeholder(tf.float32)
         
     def add_noise(self, imgs):
         # 加入噪声
         noise_factor = 0.5
         #print(*imgs.shape)
+        # 產生平均為0，標準差為0.5 的噪聲
         noisy_imgs = imgs + noise_factor * np.random.randn(*imgs.shape)
         #noisy_imgs = imgs 
         noisy_imgs = np.clip(noisy_imgs, 0., 1.)
@@ -1106,7 +1226,7 @@ class DenoiseSparseConvolutionMaxpoolAutoEncoder(SparseConvolutionMaxpoolAutoEnc
         feed_dict = {self.x_input:noise_batch, self.x_target:batch, self.keep_prob:keep_prob}
         return noise_batch, feed_dict
     
-    def test_data_gen(self,n=10,keep_prob=1):
+    def test_data_gen(self,obj=None,n=10,keep_prob=1):
         batch = mnist.test.images[0:n, :]
         noise_batch = self.add_noise(batch)
         feed_dict = {self.x_input:noise_batch, self.x_target:batch, self.keep_prob:keep_prob}
@@ -1114,17 +1234,17 @@ class DenoiseSparseConvolutionMaxpoolAutoEncoder(SparseConvolutionMaxpoolAutoEnc
     
 
 
-# In[27]:
+# In[32]:
 
 
-denoisesparseconvmax_ae = DenoiseSparseConvolutionMaxpoolAutoEncoder()
+denoisesparseconvmax_ae = DenoiseSparseConvolutionMaxpoolAutoEncoder(train_dir='/train_denoise_saprse_conv_maxpool', test_dir='/test_denoise_sparse_conv_maxpool')
 
 denoisesparseconvmax_ae.train(30000)
 
 code = denoisesparseconvmax_ae.plot_test(10, draw_code=True)
 
 
-# In[28]:
+# In[33]:
 
 
 #temp = np.zeros(shape=(10,784))
@@ -1134,4 +1254,105 @@ for i in range(len(code_test)):
     code_test[i,i] = 0.3
     
 denoisesparseconvmax_ae.plot_decode(code_test)
+
+
+# ### 測試對抗noise能力
+
+# In[34]:
+
+
+temp = denoisesparseconvmax_ae.plot_test(test_size=20, test_data_gen=test_data_gen1)
+temp = denoisesparseconvmax_ae.plot_test(test_size=20, test_data_gen=test_data_gen2)
+
+
+# # Contractive Autoencoder(CAE)
+# 
+# - [Neural networks [6.7] : Autoencoder - contractive autoencoder - YouTube](https://youtu.be/79sYlJ8Cvlc)
+# 
+# - [Hugo Larochelle](http://info.usherbrooke.ca/hlarochelle/neural_networks/content.html)
+# 
+# 
+
+# In[41]:
+
+
+class ContractiveConvolutionMaxpoolAutoEncoder(SparseConvolutionMaxpoolAutoEncoder):
+    def loss_func(self):
+        with tf.name_scope('cost'):
+            
+            # reconstruction term
+            self.x_reconstruct = self.h_d[-1]
+            
+            
+#             # 計算KL divergence 時，必須要通過 sigmoid，因為KL divergence 是計算機率，其中有log(1-P)項，
+#             # 如果沒有通過sigmoid，算出來P可能大於1，就會變成nan
+#             from functools import reduce
+#             beta = 7.5e-3
+#             kl_div_loss = reduce(lambda x, y: x+y, 
+#                                  map(lambda x: tf.reduce_sum(kl_div(0.02, tf.reduce_mean(x,0))), 
+#                                      [tf.nn.sigmoid(tf.layers.Flatten()(self.h_e[-1]))]))
+            
+            # 計算 Jacobian loss
+            from tensorflow.python.ops.parallel_for.gradients import jacobian, batch_jacobian
+            alpha = 1e-1
+            print(self.h_e[-1].shape)
+            print(self.x_input.shape)
+            # calculate jacobian
+            J=batch_jacobian(self.h_e[-1],self.x_input)
+            print(J.shape)
+            # square of Frobenius norm of jacobian
+            jacobian_loss = tf.pow(tf.norm(J, ord='fro', axis=[-2,-1]),2)
+            
+            # 使用平方差loss 的話，輸出層不能加激發函數，而且decode layers 的激發函數必須用sigmoid
+            # 用sigmoid就無法建立很深層的layers
+            #loss = tf.pow((x_reconstruct - x_origin),2)
+
+            # 使用cross entropy 的效果比平方差效果更好，而且隱藏層的激發函數都可以使用relu
+            # relu 的好處是可以建立很深的layers
+            logits_ = self.h_d[-2]
+            targets_ = self.x_target_reshape
+            
+            # 思考問題：為何要用 sigmoid_cross_entropy_with_logits？
+            # ans: 因為每個 pixel 的值介於0~1，可以當成機率值，計算cross entropy，又sigmoid 是element-wise計算cross entropy
+            #      而softmax 是強迫所有輸出值和為1，顯然在圖片上，我們不需要所有輸出和為1。
+            #loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=targets_, logits=logits_) + beta * kl_div_loss
+            loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=targets_, logits=logits_) + alpha * jacobian_loss
+            #loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=targets_, logits=logits_) + beta * kl_div_loss
+            self.cost = tf.reduce_mean(loss)
+
+        with tf.name_scope('train_step'):
+            self.optimizer = tf.train.AdamOptimizer(0.001).minimize(self.cost)    
+
+
+
+# In[42]:
+
+
+cae = ContractiveConvolutionMaxpoolAutoEncoder(test_size=100, train_dir='/train_CAE', test_dir='/test_CAE')
+
+cae.train(30000)
+
+code = cae.plot_test(10, draw_code=True)
+
+
+# In[46]:
+
+
+#temp = np.zeros(shape=(10,784))
+import numpy as np
+code_test = np.zeros(shape=(10,10))
+
+for i in range(len(code_test)):
+    code_test[i,i] = 1
+    
+cae.plot_decode(code_test)
+
+
+# ### 測試對抗noise能力
+
+# In[45]:
+
+
+temp = cae.plot_test(test_size=20, test_data_gen=test_data_gen1)
+temp = cae.plot_test(test_size=20, test_data_gen=test_data_gen2)
 
