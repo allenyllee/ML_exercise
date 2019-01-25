@@ -4,6 +4,9 @@
 # # AutoEncoder(tensorflow)
 # 
 # 參考資料：
+# 
+# - [Tensorflow Day17 Sparse Autoencoder - iT 邦幫忙::一起幫忙解決難題，拯救 IT 人的一天](https://ithelp.ithome.com.tw/articles/10188255)
+# 
 # - [Tensorflow Day18 Convolutional Autoencoder - iT 邦幫忙::一起幫忙解決難題，拯救 IT 人的一天](https://ithelp.ithome.com.tw/articles/10188326)
 # 
 # - [利用卷积自编码器对图片进行降噪 - 知乎](https://zhuanlan.zhihu.com/p/27902193)
@@ -39,7 +42,7 @@ def bias_variable(shape, name='B'):
     return b
 
 
-# In[3]:
+# In[8]:
 
 
 def plot_n_reconstruct(origin_img, reconstruct_img, n =10):
@@ -128,13 +131,13 @@ def add_noise1(imgs):
     noisy_imgs = np.clip(noisy_imgs, 0., 1.)
     return noisy_imgs
 
-def test_data_gen1(obj,n=10,keep_prob=1):
+def test_data_gen1(self,n=10,keep_prob=1):
     batch = mnist.test.images[0:n, :]
     noise_batch = add_noise1(batch)
     
-    print(obj.x_input.shape)
+    print(self.x_input.shape)
     
-    feed_dict = {obj.x_input:noise_batch, obj.keep_prob:keep_prob}
+    feed_dict = {self.x_input:noise_batch, self.keep_prob:keep_prob}
     return noise_batch, feed_dict
 
 # 高斯噪聲
@@ -148,13 +151,13 @@ def add_noise2(imgs):
     noisy_imgs = np.clip(noisy_imgs, 0., 1.)
     return noisy_imgs
 
-def test_data_gen2(obj,n=10,keep_prob=1):
+def test_data_gen2(self,n=10,keep_prob=1):
     batch = mnist.test.images[0:n, :]
     noise_batch = add_noise2(batch)
     
-    print(obj.x_input.shape)
+    print(self.x_input.shape)
     
-    feed_dict = {obj.x_input:noise_batch, obj.keep_prob:keep_prob}
+    feed_dict = {self.x_input:noise_batch, self.keep_prob:keep_prob}
     return noise_batch, feed_dict
 
 
@@ -194,7 +197,7 @@ def test_data_gen2(obj,n=10,keep_prob=1):
 # - [How to use tensorboard Embedding Projector? - Stack Overflow](https://stackoverflow.com/questions/40849116/how-to-use-tensorboard-embedding-projector)
 # 
 
-# In[4]:
+# In[9]:
 
 
 import os
@@ -350,7 +353,7 @@ class Autoencoder:
         batch = mnist.train.next_batch(n)[0]
         return batch, {self.x_input:batch, self.keep_prob:keep_prob}
     
-    def test_data_gen(self, obj=None, n=10, keep_prob=1):
+    def test_data_gen(self, n=10, keep_prob=1):
         batch = mnist.test.images[0:n, :]
         return batch, {self.x_input:batch, self.keep_prob:keep_prob}
     
@@ -398,10 +401,18 @@ class Autoencoder:
             print("average output activation value %g" % tf.reduce_mean(h_i).eval(feed_dict=test_feed_dict))
             
     def plot_test(self, test_size=10, test_data_gen=None, draw_code=True):
+        # 我們希望能夠傳入其他的 test data generator，所以test_data_gen 預設是None，
+        # 當沒有傳入其他外部的 generator 時，使用內部的 generator (self.test_data_gen)
+        # 當傳入其他外部的 generator 時，使用functools.partial 傳入self (partial(test_data_gen, self))
         if test_data_gen is None:
             test_data_gen = self.test_data_gen
-            
-        test_origin_img, test_feed_dict = test_data_gen(obj=self, n=test_size)
+        else:
+            # [python pass self to referenced function - Stack Overflow](https://stackoverflow.com/questions/32319027/python-pass-self-to-referenced-function)
+            from functools import partial
+            test_data_gen = partial(test_data_gen, self)
+        
+        
+        test_origin_img, test_feed_dict = test_data_gen(n=test_size)
         test_reconstruct_img = self.x_reconstruct.eval(feed_dict=test_feed_dict)
         print(self.x_reconstruct.shape)
 
@@ -458,7 +469,7 @@ class Autoencoder:
         plt.show()
 
 
-# In[5]:
+# In[10]:
 
 
 ae = Autoencoder()
@@ -470,7 +481,7 @@ code_non_sparse = ae.plot_test(test_size=10)
 
 # ### 畫出每個維度特徵圖
 
-# In[6]:
+# In[11]:
 
 
 import numpy as np
@@ -484,7 +495,7 @@ ae.plot_decode(code_test)
 
 # ### 測試對抗noise能力
 
-# In[7]:
+# In[12]:
 
 
 temp = ae.plot_test(test_size=20, test_data_gen=test_data_gen1)
