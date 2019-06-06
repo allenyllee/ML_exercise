@@ -70,7 +70,7 @@ df.head(10)
 
 # ### 结核病 (TB)
 
-# In[7]:
+# In[60]:
 
 
 df = pd.read_csv('data/tb.csv')
@@ -97,6 +97,68 @@ df['age'] = df['column'].str[1:].map({
 df = df[['country', 'year', 'sex', 'age', 'cases']]
 df.to_csv('data/tb-tidy.csv', index=False)
 df.head(10)
+
+
+# ### set_index() 與stack() 的用法
+
+# In[61]:
+
+
+df2 = df.set_index(['country', 'year'])
+
+
+# In[64]:
+
+
+df2.head(10)
+
+
+# In[65]:
+
+
+df2 = df2.stack()
+
+
+# In[66]:
+
+
+pd.DataFrame(df2).head(10)
+
+
+# In[67]:
+
+
+df2.index = df2.index.rename('label', level=2)
+
+
+# In[69]:
+
+
+pd.DataFrame(df2).head(10)
+
+
+# In[70]:
+
+
+df2.name = 'text'
+
+
+# In[71]:
+
+
+pd.DataFrame(df2).head(10)
+
+
+# In[72]:
+
+
+df2 = df2.reset_index()
+
+
+# In[74]:
+
+
+df2.head(10)
 
 
 # ## 变量存储在行和列中
@@ -152,4 +214,68 @@ df = df[['id', 'date', 'rank']]
 df_track.to_csv('data/billboard-track.csv', index=False)
 df.to_csv('data/billboard-rank.csv', index=False)
 print(df_track, '\n\n', df)
+
+
+# ### wide_to_long() 範例
+
+# In[32]:
+
+
+df = pd.DataFrame({
+    'famid': [1, 1, 1, 2, 2, 2, 3, 3, 3],
+    'birth': [1, 2, 3, 1, 2, 3, 1, 2, 3],
+    'ht1': [2.8, 2.9, 2.2, 2, 1.8, 1.9, 2.2, 2.3, 2.1],
+    'ht2': [3.4, 3.8, 2.9, 3.2, 2.8, 2.4, 3.3, 3.4, 2.9]
+})
+
+
+# In[33]:
+
+
+df
+
+
+# In[34]:
+
+
+l = pd.wide_to_long(df, stubnames='ht', i=['famid', 'birth'], j='age')
+
+
+# In[35]:
+
+
+l
+
+
+# In[54]:
+
+
+w = l.unstack()
+w
+
+
+# In[55]:
+
+
+w.columns
+
+
+# In[56]:
+
+
+w.columns.map(print)
+
+
+# In[58]:
+
+
+# w.columns = w.columns.map('{0[0]}{0[1]}'.format)
+w.columns = w.columns.map(lambda x: f'{x[0]}{x[1]}')
+w.columns
+
+
+# In[59]:
+
+
+w.reset_index()
 
