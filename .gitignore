@@ -2,3 +2,4 @@ Autoencoder/data/
 Autoencoder/MNIST_data/
 .history/
 .ipynb_checkpoints/
+.vscode/settings.json
